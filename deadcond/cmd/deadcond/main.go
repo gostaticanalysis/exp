@@ -1,7 +1,7 @@
 package main
 
 import (
-	"github.com/gostaticanalysis/deadcond"
+	"github.com/gostaticanalysis/exp/deadcond"
 	"golang.org/x/tools/go/analysis/singlechecker"
 )
 

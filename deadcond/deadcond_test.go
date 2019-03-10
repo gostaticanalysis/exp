@@ -3,7 +3,7 @@ package deadcond_test
 import (
 	"testing"
 
-	"github.com/gostaticanalysis/deadcond"
+	"github.com/gostaticanalysis/exp/deadcond"
 	"golang.org/x/tools/go/analysis/analysistest"
 )
 

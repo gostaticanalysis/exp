@@ -43,10 +43,13 @@ func NewPreCond(parents []*PreCond) *PreCond {
 
 	for i := range parents {
 		for cnd, val := range parents[i].m {
-			if !pc.Lookup(cnd, !val) {
-				pc.m[cnd] = val
-			} else {
+			switch {
+			case pc.Lookup(cnd, !val):
 				pc.conflict[cnd] = val
+			case pc.hasPhi(cnd):
+				// skip
+			default:
+				pc.m[cnd] = val
 			}
 		}
 	}
@@ -54,7 +57,31 @@ func NewPreCond(parents []*PreCond) *PreCond {
 	return pc
 }
 
+func (pc *PreCond) isPhi(v ssa.Value) bool {
+	_, ok := v.(*ssa.Phi)
+	return ok
+}
+
+func (pc *PreCond) hasPhi(v ssa.Value) bool {
+
+	switch v := v.(type) {
+	case *ssa.Phi:
+		return true
+	case *ssa.UnOp:
+		return pc.hasPhi(v.X)
+	case *ssa.BinOp:
+		return pc.hasPhi(v.X) || pc.hasPhi(v.Y)
+	}
+
+	return false
+}
+
 func (pc *PreCond) Put(condVal ssa.Value, val bool) (conflicted bool) {
+
+	if pc.hasPhi(condVal) {
+		return false
+	}
+
 	if pc.conflicted(condVal, val) {
 		pc.conflict[condVal] = val
 		return true
@@ -62,7 +89,7 @@ func (pc *PreCond) Put(condVal ssa.Value, val bool) (conflicted bool) {
 
 	if c := pc.lookup(condVal, !val); c != nil {
 		delete(pc.m, c)
-		fmt.Println("conflict", condVal, "vs", c)
+		//fmt.Println("conflict", condVal, "vs", c)
 		pc.conflict[condVal] = val
 		return true
 	}
@@ -259,12 +286,15 @@ func run(pass *analysis.Pass) (interface{}, error) {
 
 			for _, val := range []bool{false, true} {
 				if cnd := pc.lookup(ifinst.Cond, val); cnd != nil {
-					fmt.Println(ifinst.Cond)
-					fmt.Println(cnd)
+					//fmt.Println(ifinst.Cond)
+					//fmt.Println(cnd)
 
 					pos := ifinst.Cond.Pos()
 					f := fileByPos(pass, pos)
-					path, _ := astutil.PathEnclosingInterval(f, pos, pos)
+					var path []ast.Node
+					if f != nil {
+						path, _ = astutil.PathEnclosingInterval(f, pos, pos)
+					}
 					if len(path) != 0 {
 						var buf bytes.Buffer
 						format.Node(&buf, pass.Fset, path[0])
@@ -282,12 +312,12 @@ func run(pass *analysis.Pass) (interface{}, error) {
 	for i := range funcs {
 		fmt.Println(funcs[i])
 		for _, b := range funcs[i].Blocks {
-			fmt.Println(b)
+			fmt.Println(b, b.Preds, b.Succs)
 
 			if preconds[b] != nil && len(preconds[b].m) != 0 {
 				fmt.Println("=========")
 				for cnd := range preconds[b].m {
-					fmt.Println(cnd)
+					fmt.Printf("%#v\n", cnd)
 				}
 				fmt.Println("=========")
 			}

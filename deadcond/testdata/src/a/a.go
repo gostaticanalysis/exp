@@ -15,7 +15,17 @@ func f() {
 		return
 	}
 
-	if n >= zero { // want "n >= zero is always true"
+	if n >= zero { // -want "n >= zero is always true"
 		println("n != 0")
+	}
+
+	m := 10
+	var i int
+	for { // ignore for loop
+		i++
+		m -= i
+		if m < 0 {
+			break
+		}
 	}
 }

@@ -57,20 +57,68 @@ func NewPreCond(parents []*PreCond) *PreCond {
 	return pc
 }
 
-func (pc *PreCond) isPhi(v ssa.Value) bool {
-	_, ok := v.(*ssa.Phi)
-	return ok
-}
-
 func (pc *PreCond) hasPhi(v ssa.Value) bool {
 
 	switch v := v.(type) {
-	case *ssa.Phi:
+	case *ssa.Phi, *ssa.Parameter, *ssa.Alloc, *ssa.Field,
+		*ssa.FieldAddr, *ssa.IndexAddr, *ssa.Next:
 		return true
 	case *ssa.UnOp:
 		return pc.hasPhi(v.X)
 	case *ssa.BinOp:
 		return pc.hasPhi(v.X) || pc.hasPhi(v.Y)
+	case ssa.CallInstruction:
+		if pc.hasPhi(v.Common().Value) {
+			return true
+		}
+
+		for _, arg := range v.Common().Args {
+			if pc.hasPhi(arg) {
+				return true
+			}
+		}
+	case *ssa.ChangeType:
+		return pc.hasPhi(v.X)
+	case *ssa.ChangeInterface:
+		return pc.hasPhi(v.X)
+	case *ssa.Convert:
+		return pc.hasPhi(v.X)
+	case *ssa.Extract:
+		return pc.hasPhi(v.Tuple)
+	case *ssa.Index:
+		return pc.hasPhi(v.X)
+	case *ssa.Lookup:
+		return pc.hasPhi(v.X) || pc.hasPhi(v.Index)
+	case *ssa.MakeChan:
+		return pc.hasPhi(v.Size)
+	case *ssa.MakeClosure:
+		if pc.hasPhi(v.Fn) {
+			return true
+		}
+		for _, b := range v.Bindings {
+			if pc.hasPhi(b) {
+				return true
+			}
+		}
+	case *ssa.MakeInterface:
+		return pc.hasPhi(v.X)
+	case *ssa.MakeMap:
+		return pc.hasPhi(v.Reserve)
+	case *ssa.MakeSlice:
+		return pc.hasPhi(v.Len) || pc.hasPhi(v.Cap)
+	case *ssa.Range:
+		return pc.hasPhi(v.X)
+	case *ssa.Select:
+		for _, s := range v.States {
+			if pc.hasPhi(s.Chan) || pc.hasPhi(s.Send) {
+				return true
+			}
+		}
+	case *ssa.Slice:
+		return pc.hasPhi(v.X) || pc.hasPhi(v.Low) ||
+			pc.hasPhi(v.High) || pc.hasPhi(v.Max)
+	case *ssa.TypeAssert:
+		return pc.hasPhi(v.X)
 	}
 
 	return false
@@ -309,30 +357,7 @@ func run(pass *analysis.Pass) (interface{}, error) {
 	}
 
 	// For Debug
-	for i := range funcs {
-		fmt.Println(funcs[i])
-		for _, b := range funcs[i].Blocks {
-			fmt.Println(b, b.Preds, b.Succs)
-
-			if preconds[b] != nil && len(preconds[b].m) != 0 {
-				fmt.Println("=========")
-				for cnd := range preconds[b].m {
-					fmt.Printf("%#v\n", cnd)
-				}
-				fmt.Println("=========")
-			}
-
-			for _, inst := range b.Instrs {
-				switch inst := inst.(type) {
-				case *ssa.UnOp:
-					fmt.Printf("\t%[1]T\n", inst.X)
-				default:
-					fmt.Printf("\t%[1]T %[1]p %[1]v\n", inst)
-				}
-			}
-			fmt.Println()
-		}
-	}
+	//debugPrint(funcs, preconds)
 
 	return nil, nil
 }
@@ -357,4 +382,55 @@ func fileByPos(pass *analysis.Pass, pos token.Pos) *ast.File {
 		}
 	}
 	return nil
+}
+
+func printValue(v ssa.Value) {
+	switch v := v.(type) {
+	case *ssa.Phi:
+		fmt.Print("Phi")
+	case *ssa.UnOp:
+		fmt.Print(v.Op, " ")
+		printValue(v.X)
+	case *ssa.BinOp:
+		printValue(v.X)
+		fmt.Print(" ", v.Op, " ")
+		printValue(v.Y)
+	case *ssa.Call:
+		printValue(v.Call.Value)
+		fmt.Print("(")
+		for _, arg := range v.Call.Args {
+			printValue(arg)
+		}
+		fmt.Print(")")
+	default:
+		fmt.Printf("%[1]v[%[1]T]", v)
+	}
+}
+
+func debugPrint(funcs []*ssa.Function, preconds map[*ssa.BasicBlock]*PreCond) {
+	for i := range funcs {
+		fmt.Println(funcs[i])
+		for _, b := range funcs[i].Blocks {
+			fmt.Println(b, b.Preds, b.Succs)
+
+			if preconds[b] != nil && len(preconds[b].m) != 0 {
+				fmt.Println("=========")
+				for cnd := range preconds[b].m {
+					printValue(cnd)
+					fmt.Println()
+				}
+				fmt.Println("=========")
+			}
+
+			for _, inst := range b.Instrs {
+				switch inst := inst.(type) {
+				case *ssa.UnOp:
+					fmt.Printf("\t%[1]T\n", inst.X)
+				default:
+					fmt.Printf("\t%[1]T %[1]p %[1]v\n", inst)
+				}
+			}
+			fmt.Println()
+		}
+	}
 }

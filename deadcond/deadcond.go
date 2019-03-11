@@ -29,20 +29,29 @@ var Analyzer = &analysis.Analyzer{
 const Doc = "deadcond is ..."
 
 type PreCond struct {
+	b        *ssa.BasicBlock
 	parents  []*PreCond
 	m        map[ssa.Value]bool
 	conflict map[ssa.Value]bool
+	from     map[ssa.Value]*ssa.BasicBlock
 }
 
-func NewPreCond(parents []*PreCond) *PreCond {
+func NewPreCond(parents []*PreCond, b *ssa.BasicBlock) *PreCond {
 	pc := &PreCond{
+		b:        b,
 		parents:  parents,
 		m:        map[ssa.Value]bool{},
 		conflict: map[ssa.Value]bool{},
+		from:     map[ssa.Value]*ssa.BasicBlock{},
 	}
 
 	for i := range parents {
 		for cnd, val := range parents[i].m {
+			// skip from me
+			if parents[i].from[cnd] == b {
+				continue
+			}
+
 			switch {
 			case pc.Lookup(cnd, !val):
 				pc.conflict[cnd] = val
@@ -119,12 +128,22 @@ func (pc *PreCond) hasPhi(v ssa.Value) bool {
 			pc.hasPhi(v.High) || pc.hasPhi(v.Max)
 	case *ssa.TypeAssert:
 		return pc.hasPhi(v.X)
+	case *ssa.Function:
+		/*
+			fmt.Print(v)
+			for _, inst := range v.Blocks[0].Instrs {
+				switch inst := inst.(type) {
+				case *ssa.Return:
+					fmt.Printf("\t %[1]v %[1]T\n", inst.Results[0])
+				}
+			}
+		*/
 	}
 
 	return false
 }
 
-func (pc *PreCond) Put(condVal ssa.Value, val bool) (conflicted bool) {
+func (pc *PreCond) Put(condVal ssa.Value, val bool, from *ssa.BasicBlock) (conflicted bool) {
 
 	if pc.hasPhi(condVal) {
 		return false
@@ -132,16 +151,18 @@ func (pc *PreCond) Put(condVal ssa.Value, val bool) (conflicted bool) {
 
 	if pc.conflicted(condVal, val) {
 		pc.conflict[condVal] = val
+		pc.from[condVal] = from
 		return true
 	}
 
 	if c := pc.lookup(condVal, !val); c != nil {
 		delete(pc.m, c)
-		//fmt.Println("conflict", condVal, "vs", c)
 		pc.conflict[condVal] = val
+		pc.from[condVal] = from
 		return true
 	}
 	pc.m[condVal] = val
+	pc.from[condVal] = from
 	return false
 }
 
@@ -308,13 +329,13 @@ func run(pass *analysis.Pass) (interface{}, error) {
 				}
 			}
 
-			pc := NewPreCond(parents)
+			pc := NewPreCond(parents, b)
 			for _, p := range b.Preds {
 				ifinst := ifInst(p)
 				if ifinst == nil {
 					continue
 				}
-				pc.Put(ifinst.Cond, true)
+				pc.Put(ifinst.Cond, true, p)
 			}
 			preconds[b] = pc
 		}
@@ -358,6 +379,7 @@ func run(pass *analysis.Pass) (interface{}, error) {
 
 	// For Debug
 	//debugPrint(funcs, preconds)
+	//dotPrint(funcs, preconds)
 
 	return nil, nil
 }
@@ -387,7 +409,7 @@ func fileByPos(pass *analysis.Pass, pos token.Pos) *ast.File {
 func printValue(v ssa.Value) {
 	switch v := v.(type) {
 	case *ssa.Phi:
-		fmt.Print("Phi")
+		fmt.Print("Phi ", v, " ")
 	case *ssa.UnOp:
 		fmt.Print(v.Op, " ")
 		printValue(v.X)
@@ -403,7 +425,7 @@ func printValue(v ssa.Value) {
 		}
 		fmt.Print(")")
 	default:
-		fmt.Printf("%[1]v[%[1]T]", v)
+		fmt.Printf("<%[1]p>%[1]v[%[1]T]", v)
 	}
 }
 
@@ -416,20 +438,47 @@ func debugPrint(funcs []*ssa.Function, preconds map[*ssa.BasicBlock]*PreCond) {
 			if preconds[b] != nil && len(preconds[b].m) != 0 {
 				fmt.Println("=========")
 				for cnd := range preconds[b].m {
-					printValue(cnd)
-					fmt.Println()
+					fmt.Println(cnd)
+					//fmt.Printf("<%p>", cnd)
+					//printValue(cnd)
+					//fmt.Println()
 				}
 				fmt.Println("=========")
 			}
 
 			for _, inst := range b.Instrs {
 				switch inst := inst.(type) {
-				case *ssa.UnOp:
-					fmt.Printf("\t%[1]T\n", inst.X)
+				case ssa.Value:
+					fmt.Print("\t")
+					printValue(inst)
+					fmt.Printf(" {{%[1]v}}\n", inst)
 				default:
 					fmt.Printf("\t%[1]T %[1]p %[1]v\n", inst)
 				}
 			}
+			fmt.Println()
+		}
+	}
+}
+
+func dotPrint(funcs []*ssa.Function, preconds map[*ssa.BasicBlock]*PreCond) {
+	for i := range funcs {
+		fmt.Println(funcs[i])
+		for _, b := range funcs[i].Blocks {
+			fmt.Printf("B%v[\n", b)
+			if preconds[b] != nil && len(preconds[b].m) != 0 {
+				fmt.Printf("label=\"B%v\n", b)
+				for cnd := range preconds[b].m {
+					fmt.Printf("%v\n", cnd)
+				}
+				fmt.Printf("\"")
+			}
+			fmt.Printf("];\n")
+
+			for _, s := range b.Succs {
+				fmt.Printf("B%v -> B%v;\n", b, s)
+			}
+
 			fmt.Println()
 		}
 	}

@@ -9,12 +9,12 @@ func g() int {
 func f(s string) {
 	//const zero = 0
 	//n := g()
-	//if n <= zero {
+	//if n == zero {
 	//	println("n == 0")
 	//	return
 	//}
 
-	//if n >= zero { // -want "n >= zero is always true"
+	//if n != zero { // -want "n != zero is always true"
 	//	println("n != 0")
 	//}
 
@@ -23,4 +23,12 @@ func f(s string) {
 	//for m+i < 10 { // ignore for loop
 	//	i++
 	//}
+
+	//for i := 0; i < 2; i++ {
+	for range []int{1, 2} {
+		n := g()
+		if n == 0 {
+			print("hoge")
+		}
+	}
 }

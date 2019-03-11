@@ -1,13 +1,16 @@
 package deadcond
 
 import (
-	"fmt"
+	"bytes"
+	"go/ast"
+	"go/format"
 	"go/token"
 
 	"github.com/gostaticanalysis/comment/passes/commentmap"
 	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/go/analysis/passes/buildssa"
 	"golang.org/x/tools/go/analysis/passes/inspect"
+	"golang.org/x/tools/go/ast/astutil"
 	"golang.org/x/tools/go/ssa"
 )
 
@@ -108,9 +111,9 @@ func (c1 cond) equal(c2 cond) bool {
 
 	switch cond2 := c2.cond.(type) {
 	case *ssa.UnOp:
-		c1.equalUnOp(cond2, c2.val)
+		return c1.equalUnOp(cond2, c2.val)
 	case *ssa.BinOp:
-		c1.equalBinOp(cond2, c2.val, true)
+		return c1.equalBinOp(cond2, c2.val, true)
 	}
 
 	return false
@@ -132,21 +135,15 @@ func (c1 cond) equalBinOp(c2 *ssa.BinOp, val, converse bool) bool {
 		if cond1.Op == c2.Op && c1.val == val {
 			switch cond1.Op {
 			case token.EQL, token.NEQ:
-				fmt.Println("cond1", cond1.X, cond1.Y)
-				fmt.Println("cond2", c2.X, c2.Y)
-				fmt.Println((cond1.X == c2.X && cond1.Y == c2.Y) ||
-					(cond1.X == c2.Y && cond1.Y == c2.X))
-				return (cond1.X == c2.X && cond1.Y == c2.Y) ||
-					(cond1.X == c2.Y && cond1.Y == c2.X)
+				return (equalValue(cond1.X, c2.X) && equalValue(cond1.Y, c2.Y)) ||
+					(equalValue(cond1.X, c2.Y) && equalValue(cond1.Y, c2.X))
 			case token.LSS, token.GTR, token.LEQ, token.GEQ:
-				return cond1.X == c2.X && cond1.Y == c2.Y
+				return (equalValue(cond1.X, c2.X) && equalValue(cond1.Y, c2.Y))
 			}
 			return false
 		}
 		if converse {
 			if c1, ok := c1.converse(); ok {
-				fmt.Println(c1.cond, c1.val)
-				fmt.Println(c2, val)
 				return c1.equalBinOp(c2, !val, false)
 			}
 		}
@@ -154,9 +151,17 @@ func (c1 cond) equalBinOp(c2 *ssa.BinOp, val, converse bool) bool {
 	return false
 }
 
-func equalVal(v1, v2 ssa.Value) bool {
+func equalValue(v1, v2 ssa.Value) bool {
 	if v1 == v2 {
 		return true
+	}
+
+	switch v1 := v1.(type) {
+	case *ssa.Const:
+		switch v2 := v2.(type) {
+		case *ssa.Const:
+			return v1.Value == v2.Value
+		}
 	}
 
 	return false
@@ -166,15 +171,21 @@ func run(pass *analysis.Pass) (interface{}, error) {
 	funcs := pass.ResultOf[buildssa.Analyzer].(*buildssa.SSA).SrcFuncs
 	preconds := map[*ssa.BasicBlock]*PreCond{}
 
-	for i := range funcs {
-		for _, b := range funcs[i].Blocks {
-			fmt.Println(b)
-			for _, inst := range b.Instrs {
-				fmt.Println("\t", inst)
-			}
-			fmt.Println()
-		}
-	}
+	// For Debug
+	//for i := range funcs {
+	//	for _, b := range funcs[i].Blocks {
+	//		fmt.Println(b)
+	//		for _, inst := range b.Instrs {
+	//			switch inst := inst.(type) {
+	//			case *ssa.UnOp:
+	//				fmt.Printf("\t%[1]T\n", inst.X)
+	//			default:
+	//				fmt.Printf("\t%[1]T %[1]p %[1]v\n", inst)
+	//			}
+	//		}
+	//		fmt.Println()
+	//	}
+	//}
 
 	for i := range funcs {
 		for _, b := range funcs[i].Blocks {
@@ -190,11 +201,20 @@ func run(pass *analysis.Pass) (interface{}, error) {
 			}
 
 			for _, p := range parents {
-				switch {
-				case p.Lookup(ifinst.Cond, true):
-					pass.Reportf(ifinst.Pos(), "nooo")
-					//case p.Lookup(ifinst.Cond, false):
-					//pass.Reportf(ifinst.Pos(), "nooo")
+				for _, val := range []bool{false, true} {
+					if p.Lookup(ifinst.Cond, val) {
+						pos := ifinst.Cond.Pos()
+						f := fileByPos(pass, pos)
+						path, _ := astutil.PathEnclosingInterval(f, pos, pos)
+						if len(path) != 0 {
+							var buf bytes.Buffer
+							format.Node(&buf, pass.Fset, path[0])
+							pass.Reportf(pos, "Condition %s must be %v", buf.String(), val)
+						} else {
+							pass.Reportf(pos, "Condition must be %v", val)
+						}
+						break
+					}
 				}
 			}
 
@@ -207,8 +227,6 @@ func run(pass *analysis.Pass) (interface{}, error) {
 			preconds[b.Succs[1]] = falsePrecond
 		}
 	}
-
-	fmt.Println(preconds)
 
 	return nil, nil
 }
@@ -224,4 +242,13 @@ func ifInst(b *ssa.BasicBlock) *ssa.If {
 	}
 
 	return ifinst
+}
+
+func fileByPos(pass *analysis.Pass, pos token.Pos) *ast.File {
+	for _, f := range pass.Files {
+		if f.Pos() <= pos && pos <= f.End() {
+			return f
+		}
+	}
+	return nil
 }

@@ -2,6 +2,7 @@ package deadcond
 
 import (
 	"bytes"
+	"fmt"
 	"go/ast"
 	"go/format"
 	"go/token"
@@ -28,38 +29,75 @@ var Analyzer = &analysis.Analyzer{
 const Doc = "deadcond is ..."
 
 type PreCond struct {
-	m map[ssa.Value]bool
+	parents  []*PreCond
+	m        map[ssa.Value]bool
+	conflict map[ssa.Value]bool
 }
 
 func NewPreCond(parents []*PreCond) *PreCond {
-	m := map[ssa.Value]bool{}
+	pc := &PreCond{
+		parents:  parents,
+		m:        map[ssa.Value]bool{},
+		conflict: map[ssa.Value]bool{},
+	}
+
 	for i := range parents {
 		for cnd, val := range parents[i].m {
-			// TODO(tenntenn): check duplicated
-			m[cnd] = val
+			if !pc.Lookup(cnd, !val) {
+				pc.m[cnd] = val
+			} else {
+				pc.conflict[cnd] = val
+			}
 		}
 	}
-	return &PreCond{m: m}
+
+	return pc
 }
 
-func (pc *PreCond) Put(condVal ssa.Value, val bool) {
+func (pc *PreCond) Put(condVal ssa.Value, val bool) (conflicted bool) {
+	if pc.conflicted(condVal, val) {
+		pc.conflict[condVal] = val
+		return true
+	}
+
+	if c := pc.lookup(condVal, !val); c != nil {
+		delete(pc.m, c)
+		fmt.Println("conflict", condVal, "vs", c)
+		pc.conflict[condVal] = val
+		return true
+	}
 	pc.m[condVal] = val
+	return false
 }
 
 func (pc *PreCond) Lookup(condVal ssa.Value, val bool) bool {
+	return pc.lookup(condVal, val) != nil
+}
+
+func (pc *PreCond) conflicted(condVal ssa.Value, val bool) bool {
+	c1 := cond{cond: condVal, val: val}
+	for c, v := range pc.conflict {
+		if c1.equal(cond{cond: c, val: !v}) {
+			return true
+		}
+	}
+	return false
+}
+
+func (pc *PreCond) lookup(condVal ssa.Value, val bool) ssa.Value {
 
 	if _, ok := pc.m[condVal]; ok {
-		return true
+		return condVal
 	}
 
 	c1 := cond{cond: condVal, val: val}
 	for c, v := range pc.m {
 		if c1.equal(cond{cond: c, val: v}) {
-			return true
+			return c
 		}
 	}
 
-	return false
+	return nil
 }
 
 type cond struct {
@@ -142,6 +180,20 @@ func (c1 cond) equalBinOp(c2 *ssa.BinOp, val, converse bool) bool {
 			}
 			return false
 		}
+
+		if cond1.Op == token.EQL && c1.val == val &&
+			(c2.Op == token.LEQ || c2.Op == token.GEQ) {
+			return equalValue(cond1.X, c2.X) && equalValue(cond1.Y, c2.Y)
+		}
+
+		if cond1.Op == token.GTR && c1.val == val && c2.Op == token.GEQ {
+			return equalValue(cond1.X, c2.X) && equalValue(cond1.Y, c2.Y)
+		}
+
+		if cond1.Op == token.LSS && c1.val == val && c2.Op == token.LEQ {
+			return equalValue(cond1.X, c2.X) && equalValue(cond1.Y, c2.Y)
+		}
+
 		if converse {
 			if c1, ok := c1.converse(); ok {
 				return c1.equalBinOp(c2, !val, false)
@@ -171,28 +223,9 @@ func run(pass *analysis.Pass) (interface{}, error) {
 	funcs := pass.ResultOf[buildssa.Analyzer].(*buildssa.SSA).SrcFuncs
 	preconds := map[*ssa.BasicBlock]*PreCond{}
 
-	// For Debug
-	//for i := range funcs {
-	//	for _, b := range funcs[i].Blocks {
-	//		fmt.Println(b)
-	//		for _, inst := range b.Instrs {
-	//			switch inst := inst.(type) {
-	//			case *ssa.UnOp:
-	//				fmt.Printf("\t%[1]T\n", inst.X)
-	//			default:
-	//				fmt.Printf("\t%[1]T %[1]p %[1]v\n", inst)
-	//			}
-	//		}
-	//		fmt.Println()
-	//	}
-	//}
-
 	for i := range funcs {
 		for _, b := range funcs[i].Blocks {
-			ifinst := ifInst(b)
-			if ifinst == nil {
-				continue
-			}
+
 			var parents []*PreCond
 			for _, p := range b.Preds {
 				if pc := preconds[p]; pc != nil {
@@ -200,31 +233,74 @@ func run(pass *analysis.Pass) (interface{}, error) {
 				}
 			}
 
-			for _, p := range parents {
-				for _, val := range []bool{false, true} {
-					if p.Lookup(ifinst.Cond, val) {
-						pos := ifinst.Cond.Pos()
-						f := fileByPos(pass, pos)
-						path, _ := astutil.PathEnclosingInterval(f, pos, pos)
-						if len(path) != 0 {
-							var buf bytes.Buffer
-							format.Node(&buf, pass.Fset, path[0])
-							pass.Reportf(pos, "Condition %s must be %v", buf.String(), val)
-						} else {
-							pass.Reportf(pos, "Condition must be %v", val)
-						}
-						break
-					}
+			pc := NewPreCond(parents)
+			for _, p := range b.Preds {
+				ifinst := ifInst(p)
+				if ifinst == nil {
+					continue
 				}
+				pc.Put(ifinst.Cond, true)
+			}
+			preconds[b] = pc
+		}
+	}
+
+	for i := range funcs {
+		for _, b := range funcs[i].Blocks {
+			pc, ok := preconds[b]
+			if !ok {
+				continue
 			}
 
-			truePrecond := NewPreCond(parents)
-			truePrecond.Put(ifinst.Cond, true)
-			preconds[b.Succs[0]] = truePrecond
+			ifinst := ifInst(b)
+			if ifinst == nil {
+				continue
+			}
 
-			falsePrecond := NewPreCond(parents)
-			falsePrecond.Put(ifinst.Cond, false)
-			preconds[b.Succs[1]] = falsePrecond
+			for _, val := range []bool{false, true} {
+				if cnd := pc.lookup(ifinst.Cond, val); cnd != nil {
+					fmt.Println(ifinst.Cond)
+					fmt.Println(cnd)
+
+					pos := ifinst.Cond.Pos()
+					f := fileByPos(pass, pos)
+					path, _ := astutil.PathEnclosingInterval(f, pos, pos)
+					if len(path) != 0 {
+						var buf bytes.Buffer
+						format.Node(&buf, pass.Fset, path[0])
+						pass.Reportf(pos, "Condition %s is always %v", buf.String(), val)
+					} else {
+						pass.Reportf(pos, "Condition is always %v", val)
+					}
+					break
+				}
+			}
+		}
+	}
+
+	// For Debug
+	for i := range funcs {
+		fmt.Println(funcs[i])
+		for _, b := range funcs[i].Blocks {
+			fmt.Println(b)
+
+			if preconds[b] != nil && len(preconds[b].m) != 0 {
+				fmt.Println("=========")
+				for cnd := range preconds[b].m {
+					fmt.Println(cnd)
+				}
+				fmt.Println("=========")
+			}
+
+			for _, inst := range b.Instrs {
+				switch inst := inst.(type) {
+				case *ssa.UnOp:
+					fmt.Printf("\t%[1]T\n", inst.X)
+				default:
+					fmt.Printf("\t%[1]T %[1]p %[1]v\n", inst)
+				}
+			}
+			fmt.Println()
 		}
 	}
 

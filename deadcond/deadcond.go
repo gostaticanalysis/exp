@@ -33,7 +33,7 @@ type PreCond struct {
 	parents  []*PreCond
 	m        map[ssa.Value]bool
 	conflict map[ssa.Value]bool
-	from     map[ssa.Value]*ssa.BasicBlock
+	//from     map[ssa.Value]*ssa.BasicBlock
 }
 
 func NewPreCond(parents []*PreCond, b *ssa.BasicBlock) *PreCond {
@@ -42,15 +42,17 @@ func NewPreCond(parents []*PreCond, b *ssa.BasicBlock) *PreCond {
 		parents:  parents,
 		m:        map[ssa.Value]bool{},
 		conflict: map[ssa.Value]bool{},
-		from:     map[ssa.Value]*ssa.BasicBlock{},
+		//from:     map[ssa.Value]*ssa.BasicBlock{},
 	}
 
-	for i := range parents {
+	//for i := range parents {
+	if len(parents) == 1 {
+		i := 0
 		for cnd, val := range parents[i].m {
 			// skip from me
-			if parents[i].from[cnd] == b {
-				continue
-			}
+			//if parents[i].from[cnd] == b {
+			//	continue
+			//}
 
 			switch {
 			case pc.Lookup(cnd, !val):
@@ -151,18 +153,18 @@ func (pc *PreCond) Put(condVal ssa.Value, val bool, from *ssa.BasicBlock) (confl
 
 	if pc.conflicted(condVal, val) {
 		pc.conflict[condVal] = val
-		pc.from[condVal] = from
+		//pc.from[condVal] = from
 		return true
 	}
 
 	if c := pc.lookup(condVal, !val); c != nil {
 		delete(pc.m, c)
 		pc.conflict[condVal] = val
-		pc.from[condVal] = from
+		//pc.from[condVal] = from
 		return true
 	}
 	pc.m[condVal] = val
-	pc.from[condVal] = from
+	//pc.from[condVal] = from
 	return false
 }
 
@@ -330,7 +332,9 @@ func run(pass *analysis.Pass) (interface{}, error) {
 			}
 
 			pc := NewPreCond(parents, b)
-			for _, p := range b.Preds {
+			//for _, p := range b.Preds {
+			if len(b.Preds) == 1 {
+				p := b.Preds[0]
 				ifinst := ifInst(p)
 				if ifinst == nil {
 					continue

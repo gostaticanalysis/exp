@@ -7,16 +7,16 @@ func g() int {
 }
 
 func f(s string) {
-	//const zero = 0
-	//n := g()
-	//if n == zero {
-	//	println("n == 0")
-	//	return
-	//}
+	const zero = 0
+	n := g()
+	if n == zero {
+		println("n == 0")
+		return
+	}
 
-	//if n != zero { // -want "n != zero is always true"
-	//	println("n != 0")
-	//}
+	if n != zero { // want "n != zero is always true"
+		println("n != 0")
+	}
 
 	//m := g()
 	//var i int

@@ -4,5 +4,5 @@ runner:
     format: golint
     level: warning
   govet:
-    cmd: go build -o /tmp/linter linter.go && go vet -vettool=/tmp/linter ./... && rm /tmp/linter
+    cmd: go vet -vettool=$(pwd)/linter ./...
     format: golint

@@ -15,5 +15,6 @@ require (
 	github.com/gostaticanalysis/notest v0.0.0-20190308173254-8cf418819436
 	github.com/gostaticanalysis/typeswitch v0.0.0-20200129070600-0c79224605d6
 	github.com/gostaticanalysis/unused v0.0.5
+	github.com/gostaticanalysis/vetgen v0.0.0-20190322061048-305cdcaa0ae3 // indirect
 	golang.org/x/tools v0.0.0-20200308013534-11ec41452d41
 )

@@ -36,5 +36,5 @@ func main() {
 			typeswitch.Analyzer,
 			unused.Analyzer,
 		}...,
-	))
+	)...)
 }

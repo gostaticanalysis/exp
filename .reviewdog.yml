@@ -6,3 +6,4 @@ runner:
   govet:
     cmd: go vet -vettool=$(pwd)/linter ./...
     format: golint
+    level: error

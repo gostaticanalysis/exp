@@ -19,7 +19,7 @@ jobs:
       - name: Install linters
         run: |
           go get -u golang.org/x/lint/golint
-          go build -o linter linters.go
+          go build -o linter linter.go
 
       - name: Setup reviewdog
         run: |

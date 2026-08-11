@@ -134,6 +134,26 @@
   }
   .filter-badge.hidden { display: none; }
 
+  #quick-genre { margin-top: 10px; }
+  #quick-genre .qg-major {
+    display: flex; gap: 6px; overflow-x: auto; padding-bottom: 2px; scrollbar-width: none;
+  }
+  #quick-genre .qg-major::-webkit-scrollbar { display: none; }
+  #quick-genre .qg-major button {
+    flex: none; min-height: 38px; padding: 0 14px; border-radius: 999px; border: 1px solid var(--border);
+    background: var(--surface); color: var(--ink-muted); font-size: 13.5px; font-weight: 700; white-space: nowrap;
+  }
+  #quick-genre .qg-major button.active { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+  #quick-genre .qg-minor {
+    display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px;
+  }
+  #quick-genre .qg-minor button {
+    flex: none; min-height: 34px; padding: 0 12px; border-radius: 999px; border: 1px solid var(--border);
+    background: var(--surface-2); color: var(--ink-muted); font-size: 12.5px; font-weight: 600;
+  }
+  #quick-genre .qg-minor button.active { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
+  #quick-genre .qg-count { color: var(--ink-faint); font-weight: 500; }
+
   .chips {
     display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px;
   }
@@ -232,6 +252,14 @@
   #filter-sheet h2 { font-size: 16px; margin: 14px 0 8px; }
   #filter-sheet h2:first-of-type { margin-top: 0; }
   .filter-group { display: flex; flex-wrap: wrap; gap: 7px; }
+  .genre-group { margin-top: 10px; }
+  .genre-group:first-child { margin-top: 0; }
+  .genre-group-label {
+    font-size: 12px; font-weight: 700; color: var(--ink-faint); text-transform: none;
+    letter-spacing: 0.02em; margin-bottom: 6px;
+  }
+  .filter-opt .qg-count { color: var(--ink-faint); font-weight: 500; margin-left: 2px; }
+  .filter-opt.checked .qg-count { color: var(--accent); }
   .filter-opt {
     min-height: 40px; padding: 0 13px; border-radius: 999px; border: 1px solid var(--border);
     background: var(--surface-2); color: var(--ink-muted); font-size: 13.5px; font-weight: 600;
@@ -280,6 +308,7 @@
     <button id="sort-dir" class="icon-btn" type="button" aria-label="並び替え方向" title="並び替え方向">↓</button>
     <button id="filter-btn" class="text-btn primary" type="button">🔍 絞り込み<span id="filter-badge" class="filter-badge hidden">0</span></button>
   </div>
+  <nav id="quick-genre" aria-label="ジャンルで絞り込み"></nav>
   <div id="chips" class="chips"></div>
 </header>
 
@@ -308,8 +337,8 @@
   <div class="grabber"></div>
   <h2>Google評価</h2>
   <div class="filter-group" id="f-rating"></div>
-  <h2>ジャンル</h2>
-  <div class="filter-group" id="f-genre"></div>
+  <h2>ジャンル（大分類・中分類）</h2>
+  <div id="f-genre"></div>
   <h2>エリア・最寄駅</h2>
   <div class="filter-group" id="f-area"></div>
   <h2>禁煙区分</h2>
@@ -376,12 +405,26 @@
   var PRIVATE_OPTS = ["あり", "半個室", "なし", "不明", "要確認"];
   var RESERVE_OPTS = ["可", "不可", "不明", "要確認"];
 
+  // 大分類（服屋サイトのカテゴリ階層と同様、大分類→中分類（=ジャンル）で絞り込めるようにする）
+  var GENRE_GROUPS = [
+    { name: "和食", genres: ["焼き鳥", "海鮮・居酒屋", "寿司", "しゃぶしゃぶ・すき焼き", "天ぷら", "とんかつ", "うなぎ", "そば・うどん", "ラーメン"] },
+    { name: "焼肉・韓国", genres: ["焼肉", "韓国料理"] },
+    { name: "中華", genres: ["中華"] },
+    { name: "洋食", genres: ["イタリアン", "フレンチ", "洋食"] },
+    { name: "カフェ・バー", genres: ["カフェ・喫茶", "バル"] },
+  ].map(function (g) { return { name: g.name, genres: g.genres.filter(function (x) { return GENRES.indexOf(x) !== -1; }) }; })
+    .filter(function (g) { return g.genres.length > 0; });
+
+  var GENRE_COUNTS = {};
+  RESTAURANTS.forEach(function (r) { GENRE_COUNTS[r.genre] = (GENRE_COUNTS[r.genre] || 0) + 1; });
+
   var state = {
     tab: "list",
     search: "",
     sortField: "rating",
     sortDir: "desc",
     minRating: 0,
+    activeMajor: "all",
     genres: {}, areas: {}, smoking: {}, kids: {}, priv: {}, reserve: {},
     hideUnknown: false,
     expandedId: null,
@@ -600,6 +643,44 @@
     });
   }
 
+  var quickGenreEl = document.getElementById("quick-genre");
+  function renderQuickGenre() {
+    var majorHtml = ['<button type="button" data-major="all" class="' + (state.activeMajor === "all" ? "active" : "") + '">すべて</button>']
+      .concat(GENRE_GROUPS.map(function (g) {
+        return '<button type="button" data-major="' + esc(g.name) + '" class="' + (state.activeMajor === g.name ? "active" : "") + '">' + esc(g.name) + "</button>";
+      }));
+    var minorGenres = state.activeMajor === "all" ? GENRES :
+      (GENRE_GROUPS.filter(function (g) { return g.name === state.activeMajor; })[0] || { genres: [] }).genres;
+    var minorHtml = minorGenres.map(function (g) {
+      return '<button type="button" data-genre="' + esc(g) + '" class="' + (state.genres[g] ? "active" : "") + '">' +
+        esc(g) + '<span class="qg-count">(' + (GENRE_COUNTS[g] || 0) + ')</span></button>';
+    });
+    quickGenreEl.innerHTML =
+      '<div class="qg-major">' + majorHtml.join("") + "</div>" +
+      '<div class="qg-minor">' + minorHtml.join("") + "</div>";
+
+    quickGenreEl.querySelectorAll(".qg-major button").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var major = btn.dataset.major;
+        state.activeMajor = major;
+        if (major === "all") {
+          state.genres = {};
+        } else {
+          state.genres = {};
+          GENRE_GROUPS.filter(function (g) { return g.name === major; })[0].genres.forEach(function (g) { state.genres[g] = true; });
+        }
+        rerender();
+      });
+    });
+    quickGenreEl.querySelectorAll(".qg-minor button").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var g = btn.dataset.genre;
+        state.genres[g] = !state.genres[g];
+        rerender();
+      });
+    });
+  }
+
   // ---- Map (no API key: self-drawn SVG projection, no external tiles) ----
   var coordRestaurants = RESTAURANTS.filter(function (r) { return r.lat != null && r.lng != null; });
   var bounds = coordRestaurants.reduce(function (b, r) {
@@ -711,7 +792,25 @@
       });
     });
   }
-  buildOptionGroup("f-genre", GENRES, state.genres);
+  function buildGenreGroupUI() {
+    var el = document.getElementById("f-genre");
+    el.innerHTML = GENRE_GROUPS.map(function (g) {
+      var opts = g.genres.map(function (o) {
+        return '<label class="filter-opt"><input type="checkbox" value="' + esc(o) + '" />' + esc(o) +
+          '<span class="qg-count">(' + (GENRE_COUNTS[o] || 0) + ')</span></label>';
+      }).join("");
+      return '<div class="genre-group"><div class="genre-group-label">' + esc(g.name) + '</div>' +
+        '<div class="filter-group">' + opts + "</div></div>";
+    }).join("");
+    el.querySelectorAll("input").forEach(function (input) {
+      input.addEventListener("change", function () {
+        state.genres[input.value] = input.checked;
+        input.closest(".filter-opt").classList.toggle("checked", input.checked);
+        rerender();
+      });
+    });
+  }
+  buildGenreGroupUI();
   buildOptionGroup("f-area", AREAS, state.areas);
   buildOptionGroup("f-smoking", SMOKING_OPTS, state.smoking);
   buildOptionGroup("f-kids", KIDS_OPTS, state.kids);
@@ -747,8 +846,10 @@
   function syncFilterUI() {
     document.querySelectorAll("#filter-sheet input[type=checkbox]").forEach(function (input) {
       if (input.id === "hide-unknown") return;
-      var group = input.closest(".filter-group");
+      var group = input.closest('[id^="f-"]');
+      if (!group) return;
       var stateObj = { "f-genre": state.genres, "f-area": state.areas, "f-smoking": state.smoking, "f-kids": state.kids, "f-private": state.priv, "f-reserve": state.reserve }[group.id];
+      if (!stateObj) return;
       input.checked = !!stateObj[input.value];
       input.closest(".filter-opt").classList.toggle("checked", input.checked);
     });
@@ -767,7 +868,7 @@
 
   document.getElementById("reset-filters").addEventListener("click", function () {
     state.genres = {}; state.areas = {}; state.smoking = {}; state.kids = {}; state.priv = {}; state.reserve = {};
-    state.hideUnknown = false; state.search = ""; state.minRating = 0;
+    state.hideUnknown = false; state.search = ""; state.minRating = 0; state.activeMajor = "all";
     document.getElementById("search").value = "";
     syncFilterUI();
     rerender();
@@ -775,7 +876,7 @@
 
   var overlay = document.getElementById("sheet-overlay");
   var sheet = document.getElementById("filter-sheet");
-  function openSheet() { overlay.classList.remove("hidden"); sheet.classList.remove("hidden"); }
+  function openSheet() { syncFilterUI(); overlay.classList.remove("hidden"); sheet.classList.remove("hidden"); }
   function closeSheet() { overlay.classList.add("hidden"); sheet.classList.add("hidden"); }
   document.getElementById("filter-btn").addEventListener("click", openSheet);
   document.getElementById("close-sheet").addEventListener("click", closeSheet);
@@ -860,6 +961,7 @@
     sheetCountEl.textContent = filtered.length;
     var unknownCount = filtered.filter(hasUnknownFields).length;
     unknownNoteEl.textContent = unknownCount > 0 ? "うち不明を含む: " + unknownCount + "件" : "";
+    renderQuickGenre();
     renderChips();
     var fc = activeFilterCount();
     filterBadgeEl.textContent = fc;

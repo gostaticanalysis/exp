@@ -126,7 +126,13 @@
     background: var(--surface); color: var(--ink); font-size: 14px; font-weight: 600; padding: 0 12px;
     display: inline-flex; align-items: center; justify-content: center; gap: 6px;
   }
-  .text-btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+  .text-btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); position: relative; }
+  .filter-badge {
+    display: inline-flex; align-items: center; justify-content: center; min-width: 18px; height: 18px;
+    padding: 0 5px; border-radius: 999px; background: var(--red-fg); color: #fff; font-size: 11px; font-weight: 800;
+    margin-left: 2px;
+  }
+  .filter-badge.hidden { display: none; }
 
   .chips {
     display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px;
@@ -272,7 +278,7 @@
       <option value="openTime">日曜の営業開始時刻</option>
     </select>
     <button id="sort-dir" class="icon-btn" type="button" aria-label="並び替え方向" title="並び替え方向">↓</button>
-    <button id="filter-btn" class="text-btn primary" type="button">絞り込み</button>
+    <button id="filter-btn" class="text-btn primary" type="button">🔍 絞り込み<span id="filter-badge" class="filter-badge hidden">0</span></button>
   </div>
   <div id="chips" class="chips"></div>
 </header>
@@ -300,6 +306,8 @@
 <div id="sheet-overlay" class="hidden"></div>
 <div id="filter-sheet" class="hidden" role="dialog" aria-label="絞り込み">
   <div class="grabber"></div>
+  <h2>Google評価</h2>
+  <div class="filter-group" id="f-rating"></div>
   <h2>ジャンル</h2>
   <div class="filter-group" id="f-genre"></div>
   <h2>エリア・最寄駅</h2>
@@ -373,6 +381,7 @@
     search: "",
     sortField: "rating",
     sortDir: "desc",
+    minRating: 0,
     genres: {}, areas: {}, smoking: {}, kids: {}, priv: {}, reserve: {},
     hideUnknown: false,
     expandedId: null,
@@ -434,6 +443,7 @@
       var hay = (r.name + " " + r.genre).toLowerCase();
       if (hay.indexOf(q) === -1) return false;
     }
+    if (state.minRating > 0 && (r.googleRating == null || r.googleRating < state.minRating)) return false;
     if (anySelected(state.genres) && !state.genres[r.genre]) return false;
     if (anySelected(state.areas) && !r.stationTags.some(function (t) { return state.areas[t]; })) return false;
     if (anySelected(state.smoking) && !state.smoking[r.smokingStatus]) return false;
@@ -568,6 +578,7 @@
       });
     }
     if (state.search) chips.push({ label: '検索: "' + state.search + '"', clear: function () { state.search = ""; document.getElementById("search").value = ""; } });
+    if (state.minRating > 0) chips.push({ label: "★" + state.minRating.toFixed(1) + "以上", clear: function () { state.minRating = 0; } });
     addGroup(state.genres, "");
     addGroup(state.areas, "");
     addGroup(state.smoking, "禁煙:");
@@ -707,6 +718,32 @@
   buildOptionGroup("f-private", PRIVATE_OPTS, state.priv);
   buildOptionGroup("f-reserve", RESERVE_OPTS, state.reserve);
 
+  var RATING_OPTS = [
+    { label: "指定なし", value: 0 },
+    { label: "★3.0以上", value: 3.0 },
+    { label: "★3.5以上", value: 3.5 },
+    { label: "★4.0以上", value: 4.0 },
+    { label: "★4.5以上", value: 4.5 },
+  ];
+  function buildRatingGroup() {
+    var el = document.getElementById("f-rating");
+    el.innerHTML = RATING_OPTS.map(function (o) {
+      return '<label class="filter-opt"><input type="radio" name="rating" value="' + o.value + '" />' + esc(o.label) + "</label>";
+    }).join("");
+    el.querySelectorAll("input").forEach(function (input) {
+      input.addEventListener("change", function () {
+        state.minRating = parseFloat(input.value);
+        el.querySelectorAll(".filter-opt").forEach(function (opt) { opt.classList.remove("checked"); });
+        input.closest(".filter-opt").classList.add("checked");
+        rerender();
+      });
+    });
+    var zero = el.querySelector('input[value="0"]');
+    zero.checked = true;
+    zero.closest(".filter-opt").classList.add("checked");
+  }
+  buildRatingGroup();
+
   function syncFilterUI() {
     document.querySelectorAll("#filter-sheet input[type=checkbox]").forEach(function (input) {
       if (input.id === "hide-unknown") return;
@@ -716,6 +753,11 @@
       input.closest(".filter-opt").classList.toggle("checked", input.checked);
     });
     document.getElementById("hide-unknown").checked = state.hideUnknown;
+    document.querySelectorAll("#f-rating input").forEach(function (input) {
+      var checked = parseFloat(input.value) === state.minRating;
+      input.checked = checked;
+      input.closest(".filter-opt").classList.toggle("checked", checked);
+    });
   }
 
   document.getElementById("hide-unknown").addEventListener("change", function (e) {
@@ -725,7 +767,7 @@
 
   document.getElementById("reset-filters").addEventListener("click", function () {
     state.genres = {}; state.areas = {}; state.smoking = {}; state.kids = {}; state.priv = {}; state.reserve = {};
-    state.hideUnknown = false; state.search = "";
+    state.hideUnknown = false; state.search = ""; state.minRating = 0;
     document.getElementById("search").value = "";
     syncFilterUI();
     rerender();
@@ -805,6 +847,13 @@
     setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
   });
 
+  function activeFilterCount() {
+    function n(obj) { return Object.keys(obj).filter(function (k) { return obj[k]; }).length; }
+    return n(state.genres) + n(state.areas) + n(state.smoking) + n(state.kids) + n(state.priv) + n(state.reserve) +
+      (state.minRating > 0 ? 1 : 0) + (state.hideUnknown ? 1 : 0);
+  }
+
+  var filterBadgeEl = document.getElementById("filter-badge");
   function rerender() {
     var filtered = getFiltered();
     countEl.textContent = filtered.length;
@@ -812,6 +861,9 @@
     var unknownCount = filtered.filter(hasUnknownFields).length;
     unknownNoteEl.textContent = unknownCount > 0 ? "うち不明を含む: " + unknownCount + "件" : "";
     renderChips();
+    var fc = activeFilterCount();
+    filterBadgeEl.textContent = fc;
+    filterBadgeEl.classList.toggle("hidden", fc === 0);
     if (state.tab === "list") renderList(filtered);
     else renderMap(filtered);
   }
